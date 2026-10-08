@@ -26,14 +26,67 @@ final class MiningModel:ObservableObject {
  @Published var thermalProtection=UserDefaults.standard.object(forKey:"thermalProtection") as? Bool ?? true
  @Published var stopReason=""
  @Published var thermalState=LoadPolicy.thermalLabel(ProcessInfo.processInfo.thermalState)
+ @Published var temperatures:(cpu:Double?,gpu:Double?)=(nil,nil)
+ @Published var earnings:PoolEarnings?
+ @Published var earningsUpdated:Date?
+ @Published var earningsLoading=false
+ @Published var earningsStatus="输入有效钱包查看收益"
  @Published var endedBackends=0
+ private let earningsSession:URLSession
+ private var earningsTask:URLSessionDataTask?
+ private var earningsAddress="",earningsRequestID=UUID()
+ private var lastEarningsAttempt:TimeInterval?
+ private let sensorQueue=DispatchQueue(label:"noid.temperature",qos:.utility)
+ private lazy var sensors=TemperatureSensors()
+ private var readingTemperatures=false
  let load=WorkerLoad()
  let maxThreads=ProcessInfo.processInfo.activeProcessorCount
  var workers:[MiningWorker]=[]
  var remaining=0
  let directory:URL
- init(directory:URL){self.directory=directory}
+ init(directory:URL,earningsSession:URLSession = .shared){self.directory=directory;self.earningsSession=earningsSession}
+ deinit{earningsTask?.cancel()}
+ func refreshEarnings(force:Bool=false,now:TimeInterval=ProcessInfo.processInfo.systemUptime){
+  let address=wallet.trimmingCharacters(in:.whitespacesAndNewlines)
+  if address != earningsAddress {
+   earningsRequestID=UUID();earningsTask?.cancel();earningsTask=nil;earningsAddress=address
+   earnings=nil;earningsUpdated=nil;earningsLoading=false;lastEarningsAttempt=nil
+  }
+  guard validWallet(address) else{earningsStatus="输入有效钱包查看收益";return}
+  guard !earningsLoading,force || lastEarningsAttempt.map({now-$0>=300}) ?? true else{return}
+  lastEarningsAttempt=now;earningsLoading=true;earningsStatus="查询中…"
+  let requestID=UUID();earningsRequestID=requestID
+  // ponytail: this is the pool website's API; update the decoder if its schema changes.
+  var request=URLRequest(url:URL(string:"https://noid.innovlab.cc/api/coins/parano1d/miner/\(address)")!)
+  request.timeoutInterval=15;request.cachePolicy = .reloadIgnoringLocalCacheData
+  earningsTask=earningsSession.dataTask(with:request){[weak self] data,response,error in
+   let result=Result<PoolEarnings,Error>{
+    if let error=error{throw error}
+    guard let response=response as? HTTPURLResponse,(200..<300).contains(response.statusCode),let data=data else{throw URLError(.badServerResponse)}
+    return try PoolEarnings.decode(data,address:address)
+   }
+   DispatchQueue.main.async{[weak self] in
+    guard let self=self,self.earningsRequestID==requestID,self.wallet.trimmingCharacters(in:.whitespacesAndNewlines)==address else{return}
+    self.earningsTask=nil;self.earningsLoading=false
+    switch result {
+    case .success(let value):self.earnings=value.found ? value:nil;self.earningsUpdated=Date();self.earningsStatus=value.found ? "":"矿池尚无此钱包记录"
+    case .failure:self.earningsStatus=self.earnings==nil ? "收益查询失败，可手动重试":"刷新失败，显示上次成功查询的收益"
+    }
+   }
+  }
+  earningsTask?.resume()
+ }
  func updateLoad(){load.set(Int(gpuIntensity),thermalProtection);UserDefaults.standard.set(cpuThreads,forKey:"cpuThreads");UserDefaults.standard.set(Int(gpuIntensity),forKey:"gpuIntensity");UserDefaults.standard.set(thermalProtection,forKey:"thermalProtection")}
+ func updateSensors(){
+  thermalState=LoadPolicy.thermalLabel(ProcessInfo.processInfo.thermalState)
+  guard !readingTemperatures else{return}
+  readingTemperatures=true
+  sensorQueue.async{[weak self] in
+   guard let self=self else{return}
+   let reading=self.sensors.read()
+   DispatchQueue.main.async{[weak self] in self?.temperatures=reading;self?.readingTemperatures=false}
+  }
+ }
  func exportLogs(){
   let panel=NSSavePanel();panel.nameFieldStringValue="NOID-Miner-log.txt"
   guard panel.runModal() == .OK,let url=panel.url else{return}
@@ -64,7 +117,7 @@ final class MiningModel:ObservableObject {
 struct ContentView:View {
  @ObservedObject var model:MiningModel
  var body:some View {
-  VStack(alignment:.leading,spacing:18){
+  VStack(alignment:.leading,spacing:12){
    HStack{VStack(alignment:.leading){Text("NOID Miner").font(.largeTitle.bold());Text("Apple Silicon · InnovLab 矿池").foregroundStyle(.secondary)};Spacer();Text(model.running ? (model.endedBackends>0 ? "部分运行":"运行中"):"已停止").foregroundStyle(model.running ? .green:.secondary)}
    Text("收款钱包").font(.headline)
    TextField("输入你的 NOID 钱包地址（o1…）",text:$model.wallet).textFieldStyle(.roundedBorder).disabled(model.running)
@@ -78,16 +131,27 @@ struct ContentView:View {
    Text("GPU 强度为目标计算占空比，可运行中调整；不是功耗上限，实际占用率会波动。").font(.caption).foregroundStyle(.secondary)
    HStack{Button("开始挖矿"){model.start()}.buttonStyle(.borderedProminent).disabled(model.running);Button("停止挖矿"){model.stop()}.disabled(!model.running);Spacer();Text("退出程序会停止挖矿").foregroundStyle(.secondary).font(.caption)}
    Divider()
+   HStack(spacing:30){metric("CPU 温度（最高）",model.temperatures.cpu.map{String(format:"%.1f °C",$0)} ?? "不可用");metric("GPU 温度（最高）",model.temperatures.gpu.map{String(format:"%.1f °C",$0)} ?? "不可用")}
    HStack(spacing:30){metric("CPU 算力",model.rate(model.cpuRate));metric("GPU 算力",model.rate(model.gpuRate));metric("合计算力",model.rate(model.cpuRate+model.gpuRate))}
    HStack(spacing:30){metric("接受份额",String(model.accepted));metric("拒绝份额",String(model.rejected));metric("过期份额",String(model.stale))}
-   Text("份额表示矿池接受了工作量，实际收益按矿池 PPLNS 规则结算。").font(.caption).foregroundStyle(.secondary)
+   earningsSection
    if !model.stopReason.isEmpty{Text(model.stopReason).font(.caption).foregroundStyle(.red).textSelection(.enabled)}
    ScrollViewReader{proxy in ScrollView{LazyVStack(alignment:.leading,spacing:5){ForEach(Array(model.logs.enumerated()),id:\.offset){i,line in Text(line).font(.system(size:11,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading).id(i)}}.padding(10)}.background(Color.black.opacity(0.05)).clipShape(RoundedRectangle(cornerRadius:8)).onChange(of:model.logs.count){_ in if let last=model.logs.indices.last {proxy.scrollTo(last,anchor:.bottom)}}}
    HStack{Text("实验版 0.4 · 无私钥输入 · 不随开机自动启动").font(.caption2).foregroundStyle(.secondary);Spacer();Button("导出诊断日志"){model.exportLogs()}.font(.caption)}
   }.padding(24).frame(minWidth:780,minHeight:730)
    .onChange(of:model.gpuIntensity){_ in model.updateLoad()}
    .onChange(of:model.thermalProtection){_ in model.updateLoad()}
-   .onReceive(Timer.publish(every:1,on:.main,in:.common).autoconnect()){_ in model.thermalState=LoadPolicy.thermalLabel(ProcessInfo.processInfo.thermalState)}
+   .onAppear{model.updateSensors();model.refreshEarnings()}
+   .onChange(of:model.wallet){_ in model.refreshEarnings()}
+   .onReceive(Timer.publish(every:2,on:.main,in:.common).autoconnect()){_ in model.updateSensors();model.refreshEarnings()}
+ }
+ var earningsSection:some View {
+  VStack(alignment:.leading,spacing:8){
+   HStack{Text("矿池收益 · NOID").font(.headline);Text("每 5 分钟刷新").font(.caption).foregroundStyle(.secondary);Spacer();Button(model.earningsLoading ? "查询中…":"刷新收益"){model.refreshEarnings(force:true)}.disabled(model.earningsLoading || !validWallet(model.wallet.trimmingCharacters(in:.whitespacesAndNewlines)));Link("查看收益",destination:URL(string:"https://noid.innovlab.cc/#miners")!).buttonStyle(.bordered)}
+   HStack(spacing:18){metric("可支付",model.earnings?.balance?.confirmed.formatted ?? "—");metric("发款中",model.earnings?.balance?.pending.formatted ?? "—");metric("累计已支付",model.earnings?.balance?.paid.formatted ?? "—");metric("待成熟预估",model.earnings?.immatureAmount ?? "—")}
+   HStack{Text(model.earningsStatus);Spacer();if let updated=model.earningsUpdated{Text("查询于 \(updated.formatted(date:.omitted,time:.standard))")}}.font(.caption).foregroundStyle(.secondary)
+   Text("钱包合计收益；按 PPLNS 结算，待成熟预估可能变化。").font(.caption).foregroundStyle(.secondary)
+  }
  }
  func metric(_ title:String,_ value:String)->some View {VStack(alignment:.leading,spacing:5){Text(title).font(.caption).foregroundStyle(.secondary);Text(value).font(.title3.monospacedDigit().bold())}.frame(maxWidth:.infinity,alignment:.leading)}
 }

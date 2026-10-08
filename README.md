@@ -1,12 +1,14 @@
 # NOID Miner for Apple Silicon
 
-开源 NOID Mac 矿工，支持 **CPU、Metal GPU、CPU + GPU**，默认连接 InnovLab 香港矿池（TLS / PPLNS）。实验版 **0.4.0**。
+开源 NOID Mac 矿工，支持 **CPU、Metal GPU、CPU + GPU**，默认连接 InnovLab 香港矿池 `stratum+ssl://hk2.innovlab.cc:19601`（TLS / PPLNS）。实验版 **0.4.0**。
 
 ## 0.4 新增负载控制和自动重连
 
 - **CPU 线程数**：1 到本机逻辑处理器数；默认 4（小于 4 的机器使用实际数量）。开始前选择，运行中先停止再调整。Rayon 线程池实际线程数会被检查。
 - **GPU 强度**：10%–100%，默认 70%，支持运行中调整。通过批次间歇控制目标计算占空比，数值不是活动监视器利用率、GPU 核心数或瓦数限制；算力会随降低强度而减少。
-- **系统过热自动降载**：默认打开。系统报告 serious 时 CPU 和 GPU 计算占空比最多 50%；critical 时暂停计算、保留连接，系统状态恢复后继续。遵循 [Apple 系统热状态 API](https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/RespondToThermalStateChanges.html)，不读取 SMC 温度、不控制风扇，不代表恒温保证。
+- **系统过热自动降载**：默认打开。系统报告 serious 时 CPU 和 GPU 计算占空比最多 50%；critical 时暂停计算、保留连接，系统状态恢复后继续。降载依据 [Apple 系统热状态 API](https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/RespondToThermalStateChanges.html)，不控制风扇，不代表恒温保证。
+- **CPU / GPU 温度**：界面显示各自已识别且可读取的传感器中的最高温度（°C），每 2 秒刷新，未开挖时也能查看。通过只读 SMC 接口读取，无需管理员权限；未找到传感器或读取失败时显示「不可用」，不沿用上一次读数。传感器显示不参与自动降载判断。键名参考 [Stats](https://github.com/exelban/stats/blob/master/Modules/Sensors/values.swift)，已在 M4 实测；其他芯片和系统版本的可用性取决于 SMC 支持。
+- **钱包收益**：首次打开或更换有效钱包时查询，此后每 **5 分钟**自动刷新，也可点击「刷新收益」。显示可支付、发款中、累计已支付和待成熟预估，单位为 NOID，统计范围是该钱包在矿池的所有矿机。查询失败保留上次结果及查询时间，5 分钟后再重试；更换钱包立即清空旧结果。待成熟预估可能变化，不代表已结算或已到账。使用矿池网页的只读 API，无需登录或私钥；接口字段未来可能变动。
 - **自动重连**：仅临时断网、连接关闭、握手/无消息超时自动重连，退避 2、4、8、16、30 秒，最高 30 秒。每次重新订阅和认证，领取新的 nonce 命名空间，不提交旧会话份额。稳定工作 30 秒后重置退避。
 - **手动停止优先**：停止或退出立即取消计算间歇和重连等待，不会自动重新开挖。钱包认证失败、未知协议、非过期份额拒绝或 CPU/GPU 校验失败仍停止，不用重连掩盖错误。
 - **停止原因和日志**：界面保留停止原因，单个后端结束会显示「部分运行」。「导出诊断日志」保存最近最多 150 行，并自动隐藏钱包；分享前仍请自己检查。
@@ -19,7 +21,7 @@
 2. 解压，把 `NOID Miner.app` 拖入「应用程序」，双击打开。
 3. 填入自己的 NOID 收款地址（`o1` 开头）。**不需要私钥、助记词或注册账号**。
 4. 选择 GPU / CPU / CPU + GPU，点击「开始挖矿」。
-5. 出现「矿池已接受份额」表示矿池已接受工作量；收益和付款在 [InnovLab](https://noid.innovlab.cc/#miners) 输入自己的钱包查询。
+5. 出现「矿池已接受份额」表示矿池已接受工作量；在界面查看每 5 分钟更新的钱包收益，或点击「查看收益」在默认浏览器打开 [InnovLab](https://noid.innovlab.cc/#miners)，输入自己的钱包查询详细收益和付款。
 
 安装包已包含运行组件，无需安装 Rust、Python、Xcode 或运行终端命令。首次 GPU 启动会编译 Metal 内核并比对官方 CPU 哈希，请稍等。
 
@@ -38,7 +40,7 @@
 
 点击「停止挖矿」、关闭最后一个窗口或退出程序均停止挖矿。普通打开不会自动开挖，不随开机启动。临时网络错误自动重连；非过期份额拒绝等校验错误仍停止。两个后端相互独立，一个停止不会伪装成两者均正常。
 
-软件没有预置收款钱包、不收集私钥、不包含远程管理功能或遥测。你填入的公开地址仅保存在本机 UserDefaults，并发送给矿池用于收益归属；运行日志只保留在窗口内。矿池能看到连接 IP、钱包和生成的 worker 名。分享截图或日志前请自己遮盖钱包。
+软件没有预置收款钱包、不收集私钥、不包含远程管理功能或遥测。你填入的公开地址仅保存在本机 UserDefaults，并发送给矿池用于收益归属及收益查询；输入有效地址后，即使未开挖，也会向 `noid.innovlab.cc` 查询收益。运行日志只保留在窗口内。矿池能看到连接 IP、钱包和生成的 worker 名。分享截图或日志前请自己遮盖钱包。
 
 ## 源码编译
 
@@ -51,11 +53,16 @@ bash build-app.command
 python3 test-gpu.py  # 可选：256 个哈希与严格目标比较验证
 xcrun swiftc -O TestPolicy.swift Engine.swift -o bin/test-policy -framework Network -framework Foundation
 bin/test-policy  # 离线负载策略、重连退避、手动停止验证，不开挖
+xcrun swiftc -O TestTemperature.swift TemperatureSensors.swift -o bin/test-temperature -framework Foundation -framework IOKit
+bin/test-temperature  # 温度解码、无效数据验证，不开挖
+bin/test-temperature --live  # 可选：连续读取本机 CPU/GPU 温度，要求两者均可用，不开挖
+xcrun swiftc -O -D PREVIEW TestEarnings.swift Earnings.swift App.swift Engine.swift TemperatureSensors.swift -o bin/test-earnings -framework Foundation -framework SwiftUI -framework AppKit -framework Network -framework IOKit
+bin/test-earnings  # 离线验证金额精度、5 分钟刷新、错误处理和钱包切换，不联网、不开挖
 ```
 
 脚本会从公开的上游仓库下载固定提交，不启动挖矿。产物在 `dist/`。官方 CPU 源码固定于 [proof-native/parano1d](https://github.com/proof-native/parano1d) 的 `d1a7e8b0816b29029e2066bf9a974253bb4a07c8`（2.0.2）；Cargo.lock 固定依赖。
 
-`App.swift` 是 SwiftUI 界面，`Engine.swift` 管理 TLS Stratum 与进程，`MetalMiner.swift` 调度 GPU，`noid.metal` 实现哈希，`oracle` 使用上游 CPU 实现生成查表并校验候选。每个 GPU 候选提交前独立 CPU 校验；启动时另做哈希一致性检查。
+`App.swift` 是 SwiftUI 界面及收益查询调度，`Earnings.swift` 校验矿池收益响应并精确显示 NOID 金额，`Engine.swift` 管理 TLS Stratum 与进程，`TemperatureSensors.swift` 只读采样 CPU/GPU 温度，`MetalMiner.swift` 调度 GPU，`noid.metal` 实现哈希，`oracle` 使用上游 CPU 实现生成查表并校验候选。每个 GPU 候选提交前独立 CPU 校验；启动时另做哈希一致性检查。
 
 GF 平方、32 位乘法、tower 状态及查表优化不改变共识哈希。测试包含随机/零 header、nonce 边界、CPU/GPU 候选集合与目标相等时拒绝。
 

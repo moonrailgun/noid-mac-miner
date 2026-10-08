@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 bash build-gpu.command
 app='dist/NOID Miner.app'
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/miner/bin"
-xcrun swiftc -O -target arm64-apple-macos13.0 -parse-as-library App.swift Engine.swift -o "$app/Contents/MacOS/NOIDMiner" -framework SwiftUI -framework AppKit -framework Network -framework Foundation
+xcrun swiftc -O -target arm64-apple-macos13.0 -parse-as-library App.swift Engine.swift TemperatureSensors.swift Earnings.swift -o "$app/Contents/MacOS/NOIDMiner" -framework SwiftUI -framework AppKit -framework Network -framework Foundation -framework IOKit
 cp bin/noid-metal "$app/Contents/Resources/miner/bin/"
 cp oracle/target/release/noid-metal-oracle "$app/Contents/Resources/miner/bin/noid-cpu"
 cp noid.metal tables.bin rounds.bin rounds-tower.bin tower-small.metal "$app/Contents/Resources/miner/"

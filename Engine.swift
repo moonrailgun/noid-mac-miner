@@ -86,7 +86,7 @@ final class PoolSession {
  let username:String,event:(String)->Void,share:(Bool,Bool)->Void
  init(wallet:String,worker:String,event:@escaping(String)->Void,share:@escaping(Bool,Bool)->Void) {
   username=wallet+"."+worker;self.event=event;self.share=share
-  connection=NWConnection(host:"hk.innovlab.cc",port:19601,using:NWParameters(tls:NWProtocolTLS.Options()))
+  connection=NWConnection(host:"hk2.innovlab.cc",port:19601,using:NWParameters(tls:NWProtocolTLS.Options()))
  }
  func start() {
   connection.stateUpdateHandler={[weak self] state in
